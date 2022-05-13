@@ -1,19 +1,17 @@
 /*
   Hardware:
   1. RFID Reader
-  2. Arduino
-  3. Wall adapter
-  4. MIFARE Classic White Cards (10)
-  5. I2C LCD
+  2. Arduino Uno R3
+  3. MIFARE Classic White Cards (10)
+  4. I2C LCD
 */
 
 /*
   How to play the game:
   1. Use randomSeed() and random() to create an array of 10 random integers between 0-99
   2. Tap each card to the RFID Reader to assign it a number from the array
-      Use ReadAndWrite example from library
-      Assign a number from the array, making sure there are no duplicates
-      Show confirmation of number being assigned to the card on the LCD (don't display the number)
+      - Assign a number from the array, making sure there are no duplicates
+      - Show confirmation of number being assigned to the card on the LCD (don't display the number)
   3. Use randomSeed() and random() to pick a random index and the target value from the array
   4. Lay out the cards in a scattered formation
   5. Players take turns guessing which card contains the target value
@@ -42,7 +40,8 @@ MFRC522::MIFARE_Key key;
 int count = 0; // tracking the number of cards that have been written to
 boolean scanned = false; // to check if the first card has been scanned or not
 boolean filled[] = {false, false, false, false, false, false, false, false, false, false}; // to track what cards have data stored already
-boolean reading = false; // to start reading card values
+boolean reading = false; // to read card values
+boolean setReading = false; // to initiate card reading
 
 // Initializing array of 10 numbers to store card values:
 //       Index: 0,  1,  2,  3,  4,  5,  6,  7,  8,  9
@@ -52,11 +51,12 @@ int nums[] = { -1, -1, -1, -1, -1, -1, -1, -1, -1, -1};
 int target = 0;
 
 char val[3];
+int scanVal = 0; // storing value from 
 
 // SETUP
 void setup() {
   // DEBUGGING
-  Serial.begin(9600);
+  //Serial.begin(9600); // Uncomment this line for debugging
 
   // LCD Setup:
   lcd.init();
@@ -77,13 +77,13 @@ void setup() {
   Serial.print("Target: ");
   Serial.println(target); 
 
+  /*
   // DEBUGGING - Printing values in nums
   Serial.println("Nums:");
   for (int i = 0; i < 10; i++) {
     Serial.println(nums[i]);
   }
-  
-  Serial.println(); // DEBUGGING
+  */
 
 } // end setup()
 
@@ -114,8 +114,7 @@ void loop() {
       content.concat(String(mfrc522.uid.uidByte[i] < 0x10 ? " 0" : " "));
       content.concat(String(mfrc522.uid.uidByte[i], HEX));
     }
-
-  content.toUpperCase();
+    content.toUpperCase();
 
     // Card 1
     if (content.substring(1) == "F3 1F F6 00" && !filled[0]) {
@@ -184,11 +183,12 @@ void loop() {
   // Reading scanned card values
   mfrc522.PCD_Init();
   
-  if (count >= 10) {
+  if (count >= 10 && !setReading) {
     if ( ! mfrc522.PICC_IsNewCardPresent()) {
       reading = false;
     } else {
       reading = true;
+      setReading = true;
     }
 
     // Select one of the cards
@@ -196,13 +196,53 @@ void loop() {
       reading = false;
     } else {
       reading = true;
+      setReading = true;
     }
   }
-  
+
+  int cardVal = 0;
   while (reading) {
+
+    if ( ! mfrc522.PICC_IsNewCardPresent()) {
+      reading = false;
+    } else {
+      reading = true;
+    }
+
+    if ( ! mfrc522.PICC_ReadCardSerial()) {
+      reading = false;
+    } else {
+      reading = true;
+    }
+
+    // Reading and printing card values
     Serial.println("\n Reading");
-    readValue(mfrc522.uid);
-  }
+    cardVal = readValue(mfrc522.uid);
+    if (scanVal == cardVal) {
+      reading = true;
+      mfrc522.PCD_Init();
+      if (cardVal == 48 || scanVal == 48) {
+        lcd.clear();
+      } else {
+        lcd.clear();
+        lcd.setCursor(0, 0);
+        lcd.print(cardVal);
+        lcd.setCursor(0, 1);
+        lcd.print("Target: ");
+        lcd.print(target);
+      }
+    }
+
+    // If scanned card value = target value: Game won!
+    if (cardVal == target) {
+      lcd.setCursor(0, 1);
+      lcd.print("Game won!");
+      exit(0);
+    }
+    
+    Serial.println(cardVal);
+    
+  } // end while reading == true
 
 } // end void loop() method
 
@@ -215,6 +255,9 @@ void randArray(int *nums) {
   for (int i = 0; i < 10; i++) {
     boolean duplicate = false;
     int r = random(0, 100);
+    while (r == 48) {
+      r = random(0, 100);
+    }
     for (int j = 0; j < i; j++) {
       if (nums[j] == r) {
         duplicate = true;
@@ -283,7 +326,7 @@ void writeValue(MFRC522::Uid, int n) {
   Serial.println();
 
   // Printing card value to LCD:
-  // https://forum.arduino.cc/t/is-it-possible-to-convert-a-byte-to-char/373366/12
+  // Code modified from: https://forum.arduino.cc/t/is-it-possible-to-convert-a-byte-to-char/373366/12
   char dest[3];
   memset(dest, 0, sizeof(dest));
   sprintf(&dest[0], "%02d", (int)buffer[0]);
@@ -296,7 +339,7 @@ void writeValue(MFRC522::Uid, int n) {
   
 } // end writeValue method
 
-void readValue(MFRC522::Uid) {
+int readValue(MFRC522::Uid) {
 
   MFRC522::StatusCode status;
   byte sector         = 0;
@@ -328,27 +371,18 @@ void readValue(MFRC522::Uid) {
     Serial.println(mfrc522.GetStatusCodeName(status));
   }
   Serial.print(F("Data in block ")); Serial.print(blockAddr); Serial.println(F(":"));
-  dump_byte_array(buffer, 16); Serial.println();
   Serial.println();
 
-  reading = false;
+  reading = false; // when to read card
 
+  // Store card value in a string
   memset(val, 0, sizeof(val));
   sprintf(&val[0], "%02d", (int)buffer[0]);
-  lcd.clear();
-  lcd.setCursor(0, 0);
-  lcd.print(val);
   Serial.print(val);
   Serial.println();
+
+  // Convert string to int
+  scanVal = atoi(val);
+  return scanVal;
   
 } // end readValue method
-
-/**
- * Helper routine to dump a byte array as hex values to Serial.
- */
-void dump_byte_array(byte *buffer, byte bufferSize) {
-    for (byte i = 0; i < bufferSize; i++) {
-        Serial.print(buffer[i] < 0x10 ? " 0" : " ");
-        Serial.print(buffer[i], HEX);
-    }
-}
